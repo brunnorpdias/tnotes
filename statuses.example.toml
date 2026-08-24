@@ -1,0 +1,145 @@
+# What this vault's task statuses mean.
+#
+# Install to ~/.config/tconfig/statuses.toml — a folder neither `tcat` nor `tdiff`
+# owns. That is the point: this file describes *your vault*, not either tool, so both
+# read one table and neither has to be installed for the other to work.
+#
+# Its companion, notation.toml, says how the vault *writes* things — which sections
+# to leave out, how a weekday marker looks, where the notes live. See that file for
+# the layer order and for $TCONFIG_DIR.
+#
+# Both tools read this one, and each ignores what it has no use for:
+#
+#   [order]     BOTH   display rank
+#   [theme.*]   tcat   colours
+#   [roles]     BOTH   project / hide / settled / full_row
+#   [dedup]     BOTH   dedup precedence
+#
+# There is no built-in fallback: a status missing from [order].statuses sorts last, one
+# missing from [dedup].priority ranks 0 and loses every tie, and both tools say so once
+# on stderr.
+
+
+# ── Order ─────────────────────────────────────────────────────────────────────
+#
+# Rank is position in this list — first sorts first. Ties cannot be expressed, and
+# reordering is a matter of moving a string. Statuses not listed sort last as a
+# block, alphabetically within it.
+#
+#   u  urgent project        i  important project     p  project
+#   !  urgent                *  important             o  recurrent
+#   >  current               =  paused / switch       /  partial
+#   #  blocked / waiting     ~  snoozed               &  overrun
+#   »  postponed             «  advanced              -  cancelled
+#   x  done                (space) task
+#
+# The sequence below groups colours contiguously — purple, gold, blue, uncoloured,
+# grey — so the list reads as blocks rather than a gradient. `p` and (space) are
+# the deliberate uncoloured island between the blue and grey groups.
+
+[order]
+statuses = ["u", "!", "i", "*", ">", "=", "o", "p", " ", "/", "#", "~", "&", "»", "«", "-", "x"]
+
+
+# ── Dedup precedence (tdiff) ──────────────────────────────────────────────────
+#
+# When one task appears more than once — restated across a week, or listed twice in
+# a day — tdiff keeps a single row and has to choose which status it wears. This is
+# that choice: a list of tiers, highest precedence first, so [x] beats [/] beats [»]
+# no matter which note each came from. Ties break by most recent day.
+#
+# Deliberately NOT [order] reused. That key is tcat's display rank and runs the other
+# way — it sorts `x` last, because finished work belongs at the bottom of a list,
+# while here `x` ranks first, because "done" is the truest thing you can say about a
+# task you also wrote down as "[/] partial" on Tuesday. Same char, opposite ends.
+# A flat list also cannot express ties, and this table has three.
+#
+# Statuses absent from every tier rank 0; tdiff names them once on stderr.
+
+[dedup]
+priority = [
+    ["x"],                             # done — outranks everything
+    ["-"],                             # cancelled
+    ["!", "*", " ", "#", "o"],         # open work, however flagged
+    ["/"],                             # partial
+    ["&", "»", "«", ">", "=", "~"],    # deferred, moved, or merely current
+]
+
+
+# ── Roles ─────────────────────────────────────────────────────────────────────
+
+[roles]
+# Structural markers. In tcat each opens a project group in the default view and all
+# are dropped by --flat; tdiff excludes them from every output unconditionally, since
+# a diff of project headers says nothing about the work under them.
+project  = ["p", "i", "u"]
+
+# Never shown. Filtered *after* dedup, so an earlier [»] never suppresses a later
+# [x]. -S/--status overrides this. Both tools.
+hide     = ["&", "»", "«"]
+
+# tcat only. Statuses whose whole row takes the colour, not just the [x] marker.
+# Reserve this for settled work: it is what makes a grey *line* ("done with") read
+# differently from a grey *marker* ("deprioritised, still open"). tdiff has no use
+# for it — there the row colour already says added/deleted/changed/same.
+full_row = ["x", "-"]
+
+# Hidden by -I in both tools: work that has reached a terminal state, in either
+# direction. The default view still shows x and - (greyed across the whole row, see
+# full_row); -I is for when you want only what is still open. Both tools ask about the
+# status a row actually displays, so a task finished on either side of a diff is hidden.
+#
+# Kept separate from full_row on purpose — that key says how a row is *painted*,
+# this one says whether it is *there*. Welding them would mean a colour change
+# silently altering which tasks you see.
+settled  = ["x", "-", "&", "»", "«"]
+
+
+# ── Colours (tcat) ────────────────────────────────────────────────────────────
+#
+# tdiff ignores this section: there the row colour is the diff type — red deleted,
+# green added, yellow changed, dim same — so a status colour has nothing to paint.
+#
+# 24-bit hex, one entry per status. A status with no entry renders in the
+# terminal's default foreground — which is the right answer for the most common
+# statuses, so the list is deliberately incomplete.
+#
+# Which palette is used: $TCAT_THEME=light|dark, else the COLORFGBG most terminals
+# set, else dark.
+
+[theme.dark]
+"u" = "#910dd9"    # urgent project  ┐ purple
+"!" = "#a20ef1"    # urgent          ┘
+"i" = "#e0b400"    # important project ┐ gold
+"*" = "#e0b400"    # important         ┘
+">" = "#0d77ff"    # current         ┐
+"=" = "#0d77ff"    # paused / switch │ blue
+"o" = "#0d77ff"    # recurrent       ┘
+# p and " " intentionally absent — default foreground
+"/" = "#b3b3b3"    # partial         ┐
+"#" = "#b3b3b3"    # blocked         │
+"~" = "#b3b3b3"    # snoozed         │ grey — open, but deprioritised
+"&" = "#b3b3b3"    # overrun         │
+"»" = "#b3b3b3"    # postponed       │
+"«" = "#b3b3b3"    # advanced        ┘
+"-" = "#b3b3b3"    # cancelled       ┐ grey, whole row (see roles.full_row)
+"x" = "#b3b3b3"    # done            ┘
+
+[theme.light]
+# Gold and grey are the two that genuinely wash out on a white background; the
+# rest are darkened for contrast rather than because they were unreadable.
+"u" = "#6f0aa8"
+"!" = "#7a0bb5"
+"i" = "#8a6d00"
+"*" = "#8a6d00"
+">" = "#0a5bc4"
+"=" = "#0a5bc4"
+"o" = "#0a5bc4"
+"/" = "#8a8a8a"
+"#" = "#8a8a8a"
+"~" = "#8a8a8a"
+"&" = "#8a8a8a"
+"»" = "#8a8a8a"
+"«" = "#8a8a8a"
+"-" = "#8a8a8a"
+"x" = "#8a8a8a"
