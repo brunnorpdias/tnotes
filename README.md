@@ -22,9 +22,19 @@ loading, the date and week core, and clustering/dedup. What stays in each tool i
 genuinely its own: the diff, the grouping, the rendering, the argument parsers.
 
 **Nothing here knows a vault's vocabulary.** Not a section name, not a day-marker
-spelling, not a tag — those are the config's to say. What it does own is the notation's
-*shape*: that a task line looks like `- [x] name`, that a heading bounds a section, that
-a Sun–Sat week is named for the year it ends in.
+spelling, not a tag, not the character that marks a comment — those are the config's to
+say. What it does own is the notation's *shape*: that a task line looks like
+`- [x] name`, that a heading bounds a section, that a Sun–Sat week is named for the year
+it ends in.
+
+**And every matcher here matches the thing it names, and nothing else.** A day marker is
+a line that *is* a marker: `[days]` values are literals, anchored at both ends, with
+`{date}` as the sole placeholder — and a task line is tested for first, so it is never
+mistaken for one. A comment separator is a character the vault nominates, and only counts
+between spaces and outside every bracket and parenthesis. Two tasks are the same task iff
+their names are identical after `clean_text`, ignoring case; `cluster_records()` holds no
+similarity metric. Each of those replaced something looser that had been silently
+throwing tasks away — see `tdiff`'s CLAUDE.md for the measurements.
 
 ## Install
 
@@ -50,7 +60,7 @@ cp notation.example.toml ~/.config/tconfig/notation.toml
 cp statuses.example.toml ~/.config/tconfig/statuses.toml
 ```
 
-- **`notation.toml`** — how the vault writes things: `[exclude]`, `[days]`, `[vault]`
+- **`notation.toml`** — how the vault writes things: `[exclude]`, `[days]`, `[comment]`, `[vault]`
 - **`statuses.toml`** — what the statuses mean: `[order]`, `[dedup]`, `[roles]`, `[theme.*]`
 - **`<tool>.toml`** — optional per-tool overrides, then `$TDIFF_CONFIG`/`$TCAT_CONFIG`, then `--config`
 

@@ -26,22 +26,38 @@ they are read at import, before init() has been called — and because a vault r
 that behaved differently per tool would be a fresh way for the two to disagree.
 """
 
-import sys, re, os, time, threading, subprocess, tomllib, fnmatch
+import sys, re, os, time, threading, subprocess, tomllib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 
-_SEP_RE = re.compile(r' [-–—] ')  # hyphen, en-dash, em-dash
+# Which characters cut a trailing comment off a task name. Populated from
+# [comment] separators by load_config(); empty until then, and empty for a vault that
+# names none — in which case nothing is ever stripped, which is the honest reading of
+# a vault with no comment notation. It used to be hardcoded as ' [-–—] ', which took
+# the ASCII hyphen a keyboard produces by accident along with the en dash the vault
+# actually writes (1813 uses to 30), truncating names that only ever contained prose.
+SEP_RE = None
 
 def strip_section_suffix(s):
-    """Remove trailing ' – ...' only when the dash is outside of [...] brackets."""
+    """Remove a trailing ' <sep> ...' comment from a task name.
+
+    The separator only counts when it stands alone between spaces *and* outside every
+    bracket and parenthesis, so a linked title keeps its own dashes:
+    `check on [prompting best practices – anthropic](…)` is one name, not two. 186
+    names in this vault depend on that. Parentheses are tracked alongside brackets
+    because a markdown link's URL sits outside bracket depth, where a separator would
+    otherwise be unprotected.
+    """
+    if SEP_RE is None:
+        return s.strip()
     depth = 0
     for i, c in enumerate(s):
-        if c == '[':
+        if c in '[(':
             depth += 1
-        elif c == ']':
+        elif c in '])':
             depth = max(0, depth - 1)
-        elif depth == 0 and c == ' ' and _SEP_RE.match(s, i):
+        elif depth == 0 and c == ' ' and SEP_RE.match(s, i):
             return s[:i].strip()
     return s.strip()
 
@@ -66,6 +82,8 @@ EXCLUDED_SECTIONS = ()
 EXCLUDED_TAGS = ()
 
 DAY_PATTERNS = ()
+
+DAYS_CONFIGURED = False
 
 DAILY_FOLDER  = ''
 
@@ -169,6 +187,7 @@ def load_config(override, error, required=True):
     """
     global STATUS_PRIORITY, DISPLAY_ORDER, SETTLED_STATUSES, HIDDEN_STATUSES
     global PROJECT_STATUSES, EXCLUDED_SECTIONS, EXCLUDED_TAGS, DAY_PATTERNS
+    global DAYS_CONFIGURED, SEP_RE
     global THEMES, FULL_ROW, DAILY_FOLDER, WEEKLY_FOLDER
     global CONFIG_FOUND
 
@@ -252,24 +271,53 @@ def load_config(override, error, required=True):
             tags.append(re.compile(re.escape(t) + r'(?![\w/-])'))
     EXCLUDED_TAGS = tuple(tags)
 
-    # How this vault writes each weekday marker, as a glob matched against the whole
-    # lowercased line: "*|monday]]" finds `[[2026-08-24|monday]]` and a heading spelling
-    # of it alike. The keys are the seven canonical day names because the code has to
-    # order them — everything about how they *look* is the vault's to say. Without this
-    # the weekly note has no ladder, so a date-derived week cannot bound it; the dailies
-    # still truncate, since their bound is the filename.
-    # One glob or a list of them: a vault that has changed how it writes a marker
-    # keeps reading its own history by naming both spellings.
+    # How this vault writes each weekday marker: a **literal**, matched against the
+    # whole stripped, lowercased line. `{date}` is the only special token and stands
+    # for an ISO date; everything else — asterisks, brackets, pipes — is escaped and
+    # means itself, so "**monday**" is those ten characters and nothing else.
+    #
+    # These were globs through fnmatch until now, which is how the reported bug got in:
+    # `**saturday**` is `*saturday*` to a glob, so `- [ ] … will complete saturday or
+    # next week` scanned as a day marker and the task under it was never yielded. 394
+    # false matches against 172 real markers, and 22 tasks silently deleted vault-wide.
+    # A pattern that names a marker has to match a marker and nothing else, which means
+    # anchored at both ends and alone on the line.
+    #
+    # The keys are the seven canonical day names because the code has to order them —
+    # everything about how they *look* is the vault's to say. One literal or a list of
+    # them: a vault that has changed how it writes a marker keeps reading its own
+    # history by naming both spellings. Without this section the weekly note has no
+    # ladder, so a date-derived week cannot bound it; the dailies still truncate, since
+    # their bound is the filename.
     days = merged.get('days', {})
     pats = []
     for d in WEEK_DAYS:
         raw = days.get(d) or ()
-        globs = [raw] if isinstance(raw, str) else list(raw)
-        for g in globs:
+        forms = [raw] if isinstance(raw, str) else list(raw)
+        for g in forms:
             g = str(g).strip().lower()
             if g:
-                pats.append((d, re.compile(fnmatch.translate(g))))
+                body = _DATE_PAT.join(re.escape(p) for p in g.split(_DATE_TOKEN))
+                # {date} is the only placeholder, so any other {...} left in the value
+                # is a typo that would otherwise match nothing and bound nothing —
+                # silently, which is how the glob version of this went unnoticed for
+                # months. There is no notice for a *day* that never matches: six of
+                # this vault's sixteen weekly notes allocate nothing, and that is an
+                # ordinary week, not a broken config.
+                if re.search(r'\{[^}]*\}', g.replace(_DATE_TOKEN, '')):
+                    notice(f'[days] {d}: unknown placeholder in "{g}" '
+                           f'— only {{date}} is substituted')
+                pats.append((d, re.compile(r'\A' + body + r'\Z')))
     DAY_PATTERNS = tuple(pats)
+    DAYS_CONFIGURED = bool(pats)
+
+    # Characters that cut a trailing comment off a task name. The vault nominates
+    # them; the script holds no opinion and, given none, strips nothing.
+    seps = [c for c in ''.join(str(x) for x in
+                               merged.get('comment', {}).get('separators', [])) if not c.isspace()]
+    SEP_RE = (re.compile(' [' + re.escape(''.join(seps)) + '] ') if seps else None)
+    if merged and not seps:
+        notice('no [comment] separators configured; task names keep their trailing notes')
 
     vault = merged.get('vault', {})
     DAILY_FOLDER  = vault.get('daily_folder', '')
@@ -308,16 +356,6 @@ def _strip_wiki_path(m):
 def normalize_wikilinks(s):
     return WIKILINK_RE.sub(_strip_wiki_path, s)
 
-_PUNCT = ',.;:!?-—…'
-
-def _tokens(s):
-    out = []
-    for t in s.split():
-        t = t.lower().strip(_PUNCT)
-        if t:
-            out.append(t)
-    return out
-
 TASK_RE = re.compile(r'^(\s*)- (\[.\]) (.+)$')
 
 FENCE_RE = re.compile(r'^\s*(?:```|~~~)')
@@ -343,10 +381,22 @@ def _excluded(path, patterns):
             return True
     return False
 
+# The one token a [days] literal may carry, and what it stands for. A vault's dated
+# marker — `[[2026-08-24|monday]]` — changes every week, so one spelling cannot be a
+# fixed string; this is the whole of the wildcard vocabulary, and it names a date
+# rather than "anything at all".
+_DATE_TOKEN = '{date}'
+_DATE_PAT   = r'\d{4}-\d{2}-\d{2}'
+
 def _match_day(line, day_patterns):
-    """Which weekday marker, if any, this line is. The glob is matched against the
-    whole lowercased line, so a marker can be a heading, a bold word or a wikilink —
-    the config says which, and nothing here has an opinion."""
+    """Which weekday marker this line *is*, or None.
+
+    The pattern is anchored at both ends against the stripped, lowercased line, so a
+    marker has to be alone on it: `**monday** day` is not a marker, and neither is a
+    comment or a task that happens to mention a weekday. A marker can still be a
+    heading, a bold word or a wikilink — the config says which spelling, and nothing
+    here has an opinion beyond requiring it to be the whole line.
+    """
     text = line.strip().lower()
     for day, pat in day_patterns:
         if pat.match(text):
@@ -461,21 +511,25 @@ def parse_note(lines, exclude_tags=(), exclude=(), skip_days=(), only_days=None,
             continue
         if excl_depth is not None:
             continue
+        # A task is tested for first, and that order is load-bearing: a task line is
+        # never a day marker, whatever it says. The marker test used to run first,
+        # so `- [ ] do blood screening – will complete saturday or next week` was
+        # consumed as a marker and the task never yielded — 22 tasks lost across this
+        # vault, silently, because a swallowed line leaves no trace in the output.
+        m = TASK_RE.match(line)
+        if m:
+            if any(t.search(line) for t in exclude_tags):
+                continue
+            if cur_day in skip_days:
+                continue
+            if only_days is not None and cur_day not in only_days:
+                continue
+            seq += 1
+            yield len(m.group(1)), m.group(2)[1], clean_text(m.group(3)), seq
+            continue
         day = _match_day(line, day_patterns)
         if day is not None:
             cur_day = day
-            continue
-        m = TASK_RE.match(line)
-        if not m:
-            continue
-        if any(t.search(line) for t in exclude_tags):
-            continue
-        if cur_day in skip_days:
-            continue
-        if only_days is not None and cur_day not in only_days:
-            continue
-        seq += 1
-        yield len(m.group(1)), m.group(2)[1], clean_text(m.group(3)), seq
 
 class ObsidianError(Exception):
     """The obsidian CLI could not be run, or reported an error we can't interpret.
@@ -656,59 +710,31 @@ def weekly_path(week_label):
     return f'{WEEKLY_FOLDER}/{week_label}' if WEEKLY_FOLDER else week_label
 
 def cluster_records(records):
-    """Cluster records that name the same logical task, using union-find. Two bases
-    are the same task when their token sets are equal, or when one is a strict subset
-    of the other and both start with the same token. Returns a list of clusters (each
-    a list of records) in first-seen order of their root base."""
-    bases_in_order, seen = [], set()
-    for base, _, _ in records:
-        if base not in seen:
-            seen.add(base)
-            bases_in_order.append(base)
+    """Cluster records naming the same task. Two names are the same task **iff they
+    are identical after clean_text, ignoring case** — nothing else.
 
-    parent = {b: b for b in bases_in_order}
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
+    This replaced union-find over two heuristics: token-set equality, and strict
+    token-subset sharing a first word. Both guessed, and both guessed wrong often
+    enough to matter — `purchase coffee` swallowed `purchase new coffee grinder`,
+    `essay` swallowed `essay planning`, 56 of 221 merges in this vault had a
+    two-token side. No threshold separates those from the routine merges they look
+    exactly like (`mind hygiene whoop` really is `mind hygiene weight-in whoop tea`),
+    so the rule went instead of the tuning. Measured cost across 141 tdiff runs:
+    +1.5% rows. What it buys is a tool that never claims two tasks are one.
 
-    # Bucketing on the two merge keys gives the same clusters as an all-pairs scan
-    # without tokenizing (or comparing) every pair. Tokenless bases could only merge
-    # by exact string equality, which distinct bases never satisfy — so skip them.
-    by_tokens, by_first = {}, {}
-    for b in bases_in_order:
-        toks = _tokens(b)
-        if not toks:
-            continue
-        key = frozenset(toks)
-        by_tokens.setdefault(key, []).append(b)
-        by_first.setdefault(toks[0], []).append((b, key))
+    Case is folded because the vault spells a wikilink both ways — 25 names differ
+    only by case — and scope keys have always been lowercased. Which *spelling*
+    survives is materialize()'s call, not this one.
 
-    for group in by_tokens.values():
-        for b in group[1:]:
-            union(group[0], b)
-    for group in by_first.values():
-        for i, (a, sa) in enumerate(group):
-            for b, sb in group[i + 1:]:
-                if sa < sb or sb < sa:
-                    union(a, b)
-
-    by_root = {}
+    Returns a list of clusters (each a list of records) in first-seen order.
+    """
+    clusters, index = [], {}
     for rec in records:
-        by_root.setdefault(find(rec[0]), []).append(rec)
-
-    clusters, emitted = [], set()
-    for b in bases_in_order:
-        r = find(b)
-        if r in emitted:
-            continue
-        emitted.add(r)
-        clusters.append(by_root[r])
+        key = rec[0].casefold()
+        if key not in index:
+            index[key] = len(clusters)
+            clusters.append([])
+        clusters[index[key]].append(rec)
     return clusters
 
 def status_char(s):

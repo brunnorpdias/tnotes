@@ -55,32 +55,61 @@ tags = ["#routine"]
 
 
 [days]
-# How this vault writes each weekday marker, as a glob matched against the whole line
-# (case-insensitive, surrounding whitespace stripped). The keys are fixed — the code
-# has to know which day is which to order them — but every one of the values is yours.
+# How this vault writes each weekday marker, as a **literal** matched against the whole
+# line (case-insensitive, surrounding whitespace stripped). The marker must be alone on
+# the line: "**monday** day" is not a marker, and neither is a task or a comment that
+# happens to mention a weekday.
 #
-#   monday = "*|monday]]"      matches [[2026-08-24|monday]], and a heading form of it
-#   monday = "**monday**"      matches a bold marker
-#   monday = "#### monday"     matches a heading
-#   monday = "*segunda*"       matches whatever you actually write
+# Nothing in a value is a wildcard. Asterisks, brackets and pipes mean themselves:
+#
+#   monday = "**monday**"              matches exactly that, alone on a line
+#   monday = "#### monday"             matches a heading
+#   monday = "*segunda*"               matches whatever you actually write
+#
+# `{date}` is the one exception, and stands for an ISO date (YYYY-MM-DD) — because a
+# dated marker changes every week and cannot be a fixed string:
+#
+#   monday = "[[{date}|monday]]"       matches [[2026-08-24|monday]]
 #
 # A list gives a day several spellings, which is how a vault that has changed the
 # notation keeps reading its own history:
 #
-#   monday = ["**monday**", "*|monday]]"]
+#   monday = ["**monday**", "[[{date}|monday]]"]
 #
 # This is read for exactly one purpose: a week derived from a date stops strictly
 # before that date, which means dropping tasks allocated to that day or later. Leave
 # the section out and nothing ever opens a day, so a weekly note contributes all its
 # tasks whatever the date — the daily notes still truncate, since their bound is the
 # filename rather than anything inside them.
-sunday    = ["**sunday**",    "*|sunday]]"]
-monday    = ["**monday**",    "*|monday]]"]
-tuesday   = ["**tuesday**",   "*|tuesday]]"]
-wednesday = ["**wednesday**", "*|wednesday]]"]
-thursday  = ["**thursday**",  "*|thursday]]"]
-friday    = ["**friday**",    "*|friday]]"]
-saturday  = ["**saturday**",  "*|saturday]]"]
+#
+# Markers are looked for in **weekly notes only**. A daily note has its date in its
+# filename and nothing inside it allocates a day, so reading markers there could only
+# ever produce false ones.
+sunday    = ["**sunday**",    "[[{date}|sunday]]"]
+monday    = ["**monday**",    "[[{date}|monday]]"]
+tuesday   = ["**tuesday**",   "[[{date}|tuesday]]"]
+wednesday = ["**wednesday**", "[[{date}|wednesday]]"]
+thursday  = ["**thursday**",  "[[{date}|thursday]]"]
+friday    = ["**friday**",    "[[{date}|friday]]"]
+saturday  = ["**saturday**",  "[[{date}|saturday]]"]
+
+
+[comment]
+# Characters that cut a trailing comment off a task name, so that
+#
+#   - [ ] do blood screening – will complete saturday or next week
+#
+# is the task `do blood screening`. The separator only counts when it stands alone
+# between spaces AND outside every bracket and parenthesis, so a linked title keeps its
+# own dashes: `check on [prompting best practices – anthropic](…)` stays whole.
+#
+# Name only what your vault actually uses as notation. Listing the ASCII hyphen "-"
+# alongside the en dash is usually a mistake: a hyphen is what a keyboard produces in
+# ordinary prose, and it will truncate names you meant to keep.
+#
+# Omit the section and nothing is ever stripped, which is the right answer for a vault
+# that writes no comments.
+separators = ["–"]
 
 
 [vault]
