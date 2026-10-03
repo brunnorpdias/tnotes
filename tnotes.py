@@ -343,18 +343,80 @@ def flush_notices():
 
 WIKILINK_RE = re.compile(r'\[\[([^\[\]]+)\]\]')
 
-# A wikilink keeps its brackets and loses only its folder path, so `[[a/b|c]]` reads
-# as `[[b|c]]`. This is what clean_text runs, and what tcat's tools/check-core-sync.sh
-# lists in FUNCS.
+# A wikilink keeps its brackets and loses only what does not name the note: its folder
+# path, and its anchor **when an alias stands in for that anchor**. So `[[a/b|c]]` reads
+# as `[[b|c]]`, and `[[2026-08-05#the decline of europe|europe decline]]` as
+# `[[2026-08-05|europe decline]]` — 32 characters of heading that the alias beside it
+# already paraphrases. This vault writes 1102 anchored links and a task name that spills
+# past one line is the thing this trims.
+#
+# **An unaliased anchor stays, and that restriction is the whole of the rule.** Without
+# an alias the anchor is the only thing the link says: `knowledge: [[calculus#multivariable]]`
+# and `knowledge: [[calculus#differential equations]]` are two tasks, and
+# `reflect on [[2026-04-14#commentarii]]` is not `reflect on [[2026-04-14#tranquillitas animi]]`.
+# Stripping unconditionally merged 10 name pairs across this vault's 23728 task lines,
+# and dedup claiming two tasks are one is the failure mode the whole clustering rewrite
+# existed to remove. An alias is the vault stating outright that the anchor is not what
+# distinguishes this link; absent that, it is.
+#
+# One consequence: a *project header* written `[[2026 master's applications#imperial]]`
+# is still a different scope from `[[2026 master's applications]]`, since it carries no
+# alias. That is the surprise documented under **Projects**, and it stays — narrowing it
+# means teaching the scope key alone about anchors, not loosening this.
+#
+# The target is kept rather than reduced to the alias, which was the other candidate: an
+# alias is display text and two notes may share one, whereas the target identifies the
+# note — and identity is what dedup keys on.
+#
+# The split is on the alias first because an alias may itself contain a `#`
+# (`[[2026-02-15#recensio|week #08 planning]]`); taking the anchor off the whole inner
+# text would eat it. A bare `[[#heading]]` — a link to a heading in this same note, 445
+# of them here — has no alias and so is never touched anyway.
 def _strip_wiki_path(m):
     inner = m.group(1)
-    if '|' in inner:
-        target, alias = inner.split('|', 1)
-        return f'[[{target.rsplit("/", 1)[-1]}|{alias}]]'
-    return f'[[{inner.rsplit("/", 1)[-1]}]]'
+    if '|' not in inner:
+        return f'[[{inner.rsplit("/", 1)[-1]}]]'
+    target, alias = inner.split('|', 1)
+    target = target.rsplit('/', 1)[-1]
+    return f'[[{target.partition("#")[0] or target}|{alias}]]'
 
 def normalize_wikilinks(s):
     return WIKILINK_RE.sub(_strip_wiki_path, s)
+
+def _display_wiki(m):
+    inner = m.group(1)
+    if '|' not in inner:
+        return m.group(0)
+    return f'[{inner.split("|", 1)[1]}]'
+
+def display_text(s):
+    """A task name as it should be *printed*, never as it is matched.
+
+    An aliased wikilink collapses to its alias in single brackets:
+    `[[learning go - an idiomatic approach — bodner ⟦book⟧.pdf|learning go (1/15) –
+    setting up your go environment]]` prints as `[learning go (1/15) – setting up your
+    go environment]`. The alias is the vault's own words for the target, so the target
+    beside it is redundant on screen — and it is the long half, routinely three times
+    the alias and enough to push a row past a terminal width on its own.
+
+    **The single bracket is the point, not a shortening artefact.** The printed text is
+    no longer a link — pasting it back into the vault would resolve to a note named
+    after the alias, or to nothing — so it must not look like one. One bracket says
+    "this stood for a link" without claiming to be the link.
+
+    **An unaliased link keeps both brackets, because the target is the whole of what it
+    says.** `[[2026-05-11#felipe as co-founder]]` has no alias to prefer, and reducing
+    it would either invent one or drop the anchor that distinguishes it — the merge the
+    alias rule in `normalize_wikilinks` exists to avoid. So a double bracket on screen
+    means the name really is the link.
+
+    **This is display only, and that is what makes it safe.** `clean_text` still
+    produces the canonical name, which is what dedup keys on, what tdiff matches two
+    sides by, and what `--json` reports. Two notes may share an alias; collapsing to
+    one before dedup would claim their tasks are the same task. Nothing upstream of a
+    `print` may call this.
+    """
+    return WIKILINK_RE.sub(_display_wiki, s)
 
 TASK_RE = re.compile(r'^(\s*)- (\[.\]) (.+)$')
 
